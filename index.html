@@ -1,1 +1,101 @@
-<!DOCTYPE html><html lang="ko"><head>    <meta charset="UTF-8">    <title>시각장애인 횡단보도 잔여거리 안내</title>    <script src="https://cdn.jsdelivr.net/npm/inferencejs@latest"></script>    <style>        body { margin: 0; text-align: center; font-family: sans-serif; background: #222; color: white; }        video { width: 100%; max-width: 640px; border-bottom: 2px solid #555; }        #info { font-size: 24px; padding: 20px; color: #00ff00; }    </style></head><body>    <h1>남은 거리 안내 시스템</h1>    <video id="video" autoplay muted playsinline></video>    <div id="info">횡단보도를 찾는 중...</div>    <script>        const video = document.getElementById('video');        const infoDiv = document.getElementById('info');        let lastMsg = "";        // 1. 카메라 시작        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })            .then(stream => { video.srcObject = stream; });        // 2. Roboflow 설정 (여기에 네 정보를 넣으세요)        const p = new inferencejs.InferenceEngine();        // Find crosswalks and blinkers, 1, fHg2BmQfniF5OgYNTstt        const worker = p.inferWorker("Find crosswalks and blinkers", "1", "fHg2BmQfniF5OgYNTstt");        // 3. 실시간 감지 및 거리 계산        worker.on('predictions', (predictions) => {            if (predictions.length > 0) {                const pred = predictions[0]; // 가장 확실한 첫 번째 횡단보도 선택                const y_min = pred.y - (pred.height / 2); // 횡단보도 끝선(반대편 인도)                                let currentMsg = "";                if (y_min > 700) currentMsg = "도착했습니다.";                else if (y_min > 580) currentMsg = "2미터 남았습니다.";                else if (y_min > 480) currentMsg = "5미터 남았습니다.";                else currentMsg = "직진하세요.";                // 화면에 표시                infoDiv.innerText = currentMsg + " (y_min: " + Math.round(y_min) + ")";                                // 같은 말을 반복하지 않게 처리                if (currentMsg !== lastMsg) {                    speak(currentMsg);                    lastMsg = currentMsg;                }            }        });        function speak(text) {            const utterance = new SpeechSynthesisUtterance(text);            utterance.lang = 'ko-KR';            window.speechSynthesis.speak(utterance);        }    </script></body></html>
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>시각장애인 횡단보도 안내 시스템</title>
+    <script src="https://cdn.jsdelivr.net/npm/inferencejs@latest"></script>
+    <style>
+        body { margin: 0; text-align: center; font-family: 'Malgun Gothic', sans-serif; background: #111; color: white; overflow: hidden; }
+        #container { position: relative; width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+        video { width: 100%; height: 70%; object-fit: cover; background: #000; }
+        #info { height: 30%; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: bold; padding: 20px; background: #222; border-top: 4px solid #444; word-break: keep-all; }
+        .status-dot { width: 20px; height: 20px; border-radius: 50%; display: inline-block; margin-right: 10px; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="video" autoplay muted playsinline></video>
+        <div id="info">시스템을 초기화 중입니다...</div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const infoDiv = document.getElementById('info');
+        let lastMsg = "";
+
+        // 1. 카메라 시작 (후면 카메라 우선)
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+            .then(stream => { video.srcObject = stream; })
+            .catch(err => { infoDiv.innerText = "카메라를 찾을 수 없습니다."; });
+
+        // 2. Roboflow 설정 (여기에 네 정보를 꼭 입력해!)
+        const p = new inferencejs.InferenceEngine();
+        
+        // confidence: 0.3 (30% 확률만 되어도 감지하여 민감도 향상)
+        const worker = p.inferWorker(
+            "find-crosswalks-and-blinkers",   // 예: "crosswalk-detection-abcde"
+            "1",      // 예: "2"
+            "fHg2BmQfniF5OgYNTstt", // 예: "rf_abc123..."
+            { confidence: 0.3 }
+        );
+
+        // 3. 실시간 감지 및 로직 처리
+        worker.on('predictions', (predictions) => {
+            let crosswalk = null;
+            let trafficLight = null;
+
+            // 인식된 것들 중 횡단보도와 신호등(초록/빨강) 분류
+            predictions.forEach(pred => {
+                if (pred.class === "crosswalk") crosswalk = pred;
+                if (pred.class === "green_light" || pred.class === "red_light") trafficLight = pred;
+            });
+
+            let currentMsg = "";
+
+            // [발명 로직] 신호등이 빨간불이면 무조건 정지, 초록불일 때만 거리 안내
+            if (trafficLight && trafficLight.class === "red_light") {
+                currentMsg = "빨간불입니다. 정지하세요.";
+            } 
+            else if (trafficLight && trafficLight.class === "green_light") {
+                if (crosswalk) {
+                    // 횡단보도 윗변(반대편 인도 끝선) 좌표 계산
+                    const y_min = crosswalk.y - (crosswalk.height / 2);
+                    
+                    // 네가 찍은 사진(1m, 2m, 5m) 기준값 적용
+                    if (y_min > 700) currentMsg = "도착했습니다. 보도로 올라가세요.";
+                    else if (y_min > 580) currentMsg = "2미터 남았습니다. 거의 다 왔습니다.";
+                    else if (y_min > 480) currentMsg = "5미터 남았습니다. 계속 직진하세요.";
+                    else currentMsg = "초록불입니다. 횡단보도를 건너는 중입니다.";
+                } else {
+                    currentMsg = "초록불입니다. 전방에 횡단보도가 있습니다.";
+                }
+            } else {
+                // 신호등이 안 보일 때는 횡단보도 유무만 확인
+                if (crosswalk) {
+                    currentMsg = "횡단보도가 감지되었습니다. 신호등을 확인해주세요.";
+                } else {
+                    currentMsg = "횡단보도를 찾는 중입니다.";
+                }
+            }
+
+            // 화면 표시 및 음성 출력 (중복 메시지 방지)
+            infoDiv.innerText = currentMsg;
+            if (currentMsg !== lastMsg && currentMsg !== "") {
+                speak(currentMsg);
+                lastMsg = currentMsg;
+            }
+        });
+
+        // 4. 음성 안내 함수 (TTS)
+        function speak(text) {
+            // 기존에 말하고 있는 게 있으면 취소 (말 꼬임 방지)
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'ko-KR';
+            utterance.rate = 1.2; // 안내 속도 살짝 빠르게
+            window.speechSynthesis.speak(utterance);
+        }
+    </script>
+</body>
+</html>
